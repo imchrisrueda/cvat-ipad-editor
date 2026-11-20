@@ -1,4 +1,4 @@
-const CACHE_NAME = "cvat-ipad-editor-v2";
+const CACHE_NAME = "cvat-ipad-editor-v3";
 const PRECACHE_ASSETS = [
   "./",
   "./index.html",
