@@ -139,6 +139,8 @@
   const elLocalFilesInput = document.getElementById("local-files-input");
   const elLocalImportStatus = document.getElementById("local-import-status");
   const elBtnLocalClear = document.getElementById("btn-local-clear");
+  const elLocalSavedSection = document.getElementById("local-saved-section");
+  const elLocalSavedList = document.getElementById("local-saved-list");
 
   const elJoinPopover = document.getElementById("join-popover");
   const elJoinSummaryText = document.getElementById("join-summary-text");
@@ -1910,7 +1912,7 @@
     }, 1500);
   }
 
-  function updateLocalModalUi() {
+  async function updateLocalModalUi() {
     if (!elLocalCurrentBox) return;
     const store = window.CvatOfflineStore;
     const hasDoc = Boolean(state.offlineMode && store && store.doc);
@@ -1918,8 +1920,77 @@
     if (hasDoc) {
       const imgs = store.listImages();
       const annotated = imgs.filter((i) => i.num_masks > 0).length;
-      elLocalCurrentName.textContent = `Lote en iPad: ${store.projectName}`;
-      elLocalCurrentMeta.textContent = `${imgs.length} imágenes · ${annotated} con máscaras guardadas`;
+      const exportNote = store.needsZipExport ? " · Cambios locales pendientes de exportar a ZIP" : "";
+      elLocalCurrentName.textContent = `Lote actual en iPad: ${store.projectName}`;
+      elLocalCurrentMeta.textContent = `${imgs.length} imágenes · ${annotated} con máscaras${exportNote}`;
+    }
+
+    if (elLocalSavedSection && elLocalSavedList && store && typeof store.listSavedProjects === "function") {
+      try {
+        const projects = await store.listSavedProjects();
+        elLocalSavedSection.classList.toggle("hidden", projects.length === 0);
+        elLocalSavedList.innerHTML = "";
+        for (const proj of projects) {
+          const isCurrent = Boolean(hasDoc && proj.projectKey === store.projectKey);
+          const row = document.createElement("div");
+          row.className = "saved-proj-row" + (isCurrent ? " active" : "");
+
+          const info = document.createElement("div");
+          info.className = "saved-proj-info";
+          const title = document.createElement("span");
+          title.className = "saved-proj-title";
+          title.textContent = proj.projectName || proj.projectKey;
+          const sub = document.createElement("span");
+          sub.className = "saved-proj-sub";
+          const editLabel = proj.needsZipExport
+            ? "✏️ Editado (falta exportar ZIP)"
+            : proj.hasLocalEdits
+              ? "✅ Editado / exportado"
+              : "Original importado";
+          sub.textContent = `${proj.totalImages || 0} fotos · ${editLabel}`;
+          info.append(title, sub);
+
+          const openBtn = document.createElement("button");
+          openBtn.type = "button";
+          openBtn.className = isCurrent ? "btn btn-xs" : "btn btn-primary btn-xs";
+          openBtn.textContent = isCurrent ? "Abierto" : "Abrir";
+          openBtn.disabled = isCurrent;
+          openBtn.onclick = async () => {
+            if (state.dirty && state.currentImageId !== null) {
+              await saveCurrentMasks();
+            }
+            const ok = await store.loadSavedProject(proj.projectKey);
+            if (ok) {
+              await applyWorkspaceStatus(store.getStatus());
+              showToast(`📂 Abierto desde iPad: ${store.projectName}`);
+              closeLocalModal();
+            }
+          };
+
+          const delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "btn btn-danger-outline btn-xs";
+          delBtn.textContent = "🗑️";
+          delBtn.title = "Borrar lote de la memoria del iPad";
+          delBtn.onclick = async () => {
+            await store.deleteProject(proj.projectKey);
+            if (isCurrent) {
+              state.images = [];
+              state.objects = [];
+              state.currentImageId = null;
+              elSelectImage.innerHTML = "";
+              renderObjectsPanel();
+              photoCtx.clearRect(0, 0, photoCanvas.width, photoCanvas.height);
+              maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+              uiCtx.clearRect(0, 0, uiCanvas.width, uiCanvas.height);
+            }
+            await updateLocalModalUi();
+          };
+
+          row.append(info, openBtn, delBtn);
+          elLocalSavedList.appendChild(row);
+        }
+      } catch (_) {}
     }
   }
 
@@ -2031,9 +2102,10 @@
     if (state.offlineMode) {
       const result = await window.CvatOfflineStore.updateImageObjects(state.currentImageId, payloadObjects);
       setDirty(false);
+      elSaveStatus.textContent = "Guardado en iPad";
       showToast(`💾 Guardado en iPad (${result.num_objects} obj)`);
       await refreshImageList();
-      updateLocalModalUi();
+      await updateLocalModalUi();
       return;
     }
 
@@ -2420,6 +2492,7 @@
       if (!store || !store.doc) return showToast("Carga un lote primero");
       const { blob, filename } = await store.buildCvatZipBlob();
       triggerBlobDownload(blob, filename);
+      await updateLocalModalUi();
       showToast(`📦 Guardado ${filename}`);
       return;
     }
@@ -2489,15 +2562,31 @@
       if (!files || files.length === 0) return;
       elLocalImportStatus.textContent = "Cargando archivos en el iPad (IndexedDB)...";
       try {
+        if (state.offlineMode && state.dirty && state.currentImageId !== null) {
+          await saveCurrentMasks();
+        }
         const store = window.CvatOfflineStore;
-        const res = await store.importFiles(files, (msg) => {
-          elLocalImportStatus.textContent = msg;
-        });
+        const res = await store.importFiles(
+          files,
+          (msg) => {
+            elLocalImportStatus.textContent = msg;
+          },
+          async (existingRec) => {
+            return window.confirm(
+              `Ya tienes cambios guardados en el iPad para «${existingRec.projectName || existingRec.projectKey}».\n\n` +
+                "Aceptar = Abrir tu versión guardada en el iPad (conserva tus máscaras editadas)\n" +
+                "Cancelar = Reemplazar con el archivo original del ZIP"
+            );
+          }
+        );
         state.offlineMode = true;
         await applyWorkspaceStatus(store.getStatus());
-        updateLocalModalUi();
-        elLocalImportStatus.textContent = `✅ Lote cargado: ${res.matchedPhotos}/${res.totalImages} fotos listas en el iPad.`;
-        showToast(`📂 ${res.projectName} listo (${res.matchedPhotos} fotos)`);
+        await updateLocalModalUi();
+        const statusMsg = res.resumedExisting
+          ? `✅ Recuperado lote guardado en el iPad: ${res.projectName} (${res.matchedPhotos} fotos).`
+          : `✅ Lote cargado: ${res.matchedPhotos}/${res.totalImages} fotos listas en el iPad.`;
+        elLocalImportStatus.textContent = statusMsg;
+        showToast(res.resumedExisting ? `📂 Editado recuperado: ${res.projectName}` : `📂 ${res.projectName} listo (${res.matchedPhotos} fotos)`);
         closeLocalModal();
       } catch (err) {
         console.error(err);
@@ -2518,7 +2607,7 @@
       state.objects = [];
       state.currentImageId = null;
       elSelectImage.innerHTML = "";
-      updateLocalModalUi();
+      await updateLocalModalUi();
       elLocalImportStatus.textContent = "Caché local borrada. Elige otro lote cuando quieras.";
       showToast("🗑️ Caché local borrada");
     };

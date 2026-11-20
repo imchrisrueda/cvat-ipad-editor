@@ -66,6 +66,18 @@ html, body {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex-wrap: wrap;
+}
+
+.topbar-right {
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+.nav-save-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .image-select {
@@ -989,4 +1001,47 @@ html, body {
 .modal-foot {
   display: flex;
   justify-content: flex-end;
+}
+
+.local-saved-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.saved-proj-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.saved-proj-row.active {
+  border-color: var(--accent);
+}
+
+.saved-proj-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.saved-proj-title {
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-proj-sub {
+  font-size: 11px;
+  color: var(--muted);
 }

@@ -2,10 +2,10 @@
   "use strict";
 
   const DB_NAME = "cvat_ipad_offline_v1";
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
   const STORE_META = "meta";
   const STORE_PHOTOS = "photos";
-  const ACTIVE_KEY = "active_project";
+  const CURRENT_POINTER_KEY = "__current__";
 
   const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"]);
   const DEFAULT_LABEL_COLORS = {
@@ -97,17 +97,28 @@
     return clean || "lote_ipad";
   }
 
+  function metaKeyForProject(projectKey) {
+    return `proj::${projectKey}`;
+  }
+
+  function photoKeyFor(projectKey, relPath) {
+    return `${projectKey}::${relPath}`;
+  }
+
   function openDb() {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = () => {
         const db = req.result;
-        if (!db.objectStoreNames.contains(STORE_META)) {
-          db.createObjectStore(STORE_META, { keyPath: "key" });
+        if (db.objectStoreNames.contains(STORE_META)) {
+          db.deleteObjectStore(STORE_META);
         }
-        if (!db.objectStoreNames.contains(STORE_PHOTOS)) {
-          db.createObjectStore(STORE_PHOTOS, { keyPath: "key" });
+        if (db.objectStoreNames.contains(STORE_PHOTOS)) {
+          db.deleteObjectStore(STORE_PHOTOS);
         }
+        db.createObjectStore(STORE_META, { keyPath: "key" });
+        const photoStore = db.createObjectStore(STORE_PHOTOS, { keyPath: "key" });
+        photoStore.createIndex("by_project", "projectKey", { unique: false });
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error || new Error("No se pudo abrir IndexedDB"));
@@ -123,10 +134,20 @@
     });
   }
 
-  function idbGetAllKeys(db, storeName) {
+  function idbGetAll(db, storeName) {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(storeName, "readonly");
-      const req = tx.objectStore(storeName).getAllKeys();
+      const req = tx.objectStore(storeName).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  function idbGetPhotoKeysForProject(db, projectKey) {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_PHOTOS, "readonly");
+      const idx = tx.objectStore(STORE_PHOTOS).index("by_project");
+      const req = idx.getAllKeys(IDBKeyRange.only(projectKey));
       req.onsuccess = () => resolve(req.result || []);
       req.onerror = () => reject(req.error);
     });
@@ -226,7 +247,6 @@
       if (node.nodeType !== 1) return;
       const children = Array.from(node.childNodes).filter((c) => c.nodeType === 1);
       if (children.length === 0) return;
-      // Remove pure whitespace text nodes
       Array.from(node.childNodes).forEach((c) => {
         if (c.nodeType === 3 && !c.nodeValue.trim()) {
           node.removeChild(c);
@@ -251,12 +271,15 @@
   class OfflineWorkspaceManager {
     constructor() {
       this.db = null;
+      this.projectKey = "";
       this.projectName = "lote_ipad";
       this.doc = null;
       this.xmlText = "";
-      this.photoKeys = new Map(); // imageId -> photoKey in IndexedDB
-      this.photoUrls = new Map(); // photoKey -> objectURL
+      this.photoKeys = new Map(); // imageId -> full IndexedDB photo key
+      this.photoUrls = new Map(); // full IndexedDB photo key -> objectURL
       this.updatedAt = null;
+      this.hasLocalEdits = false;
+      this.needsZipExport = false;
     }
 
     async ensureDb() {
@@ -288,53 +311,97 @@
       return doc;
     }
 
-    resolvePhotoKeyForImage(imageName, availableKeys) {
+    resolvePhotoKeyForImage(imageName, availableKeys, projectKey) {
+      const prefix = `${projectKey}::`;
+      const relSet = new Map();
+      for (const fullKey of availableKeys) {
+        const rel = fullKey.startsWith(prefix) ? fullKey.slice(prefix.length) : fullKey;
+        relSet.set(rel, fullKey);
+      }
+
       const norm = normalizeRelPath(imageName);
       const strippedImages = norm.replace(/^images\//i, "");
       const base = baseName(norm);
 
-      if (availableKeys.has(norm)) return norm;
-      if (availableKeys.has(strippedImages)) return strippedImages;
-      if (availableKeys.has(`images/${strippedImages}`)) return `images/${strippedImages}`;
+      if (relSet.has(norm)) return relSet.get(norm);
+      if (relSet.has(strippedImages)) return relSet.get(strippedImages);
+      if (relSet.has(`images/${strippedImages}`)) return relSet.get(`images/${strippedImages}`);
 
-      for (const k of availableKeys) {
-        const kn = normalizeRelPath(k).replace(/^images\//i, "");
-        if (kn === strippedImages) return k;
+      for (const [rel, fullKey] of relSet.entries()) {
+        const kn = normalizeRelPath(rel).replace(/^images\//i, "");
+        if (kn === strippedImages) return fullKey;
       }
-      for (const k of availableKeys) {
-        if (baseName(k).toLowerCase() === base.toLowerCase()) return k;
+      for (const [rel, fullKey] of relSet.entries()) {
+        if (baseName(rel).toLowerCase() === base.toLowerCase()) return fullKey;
       }
       return null;
     }
 
-    async loadSavedProject() {
+    async listSavedProjects() {
       const db = await this.ensureDb();
-      const saved = await idbGet(db, STORE_META, ACTIVE_KEY);
+      const all = await idbGetAll(db, STORE_META);
+      return all
+        .filter((rec) => rec && typeof rec.key === "string" && rec.key.startsWith("proj::"))
+        .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+    }
+
+    async loadSavedProject(explicitProjectKey = null) {
+      const db = await this.ensureDb();
+      let targetKey = explicitProjectKey;
+      if (!targetKey) {
+        const ptr = await idbGet(db, STORE_META, CURRENT_POINTER_KEY);
+        targetKey = ptr?.activeProjectKey || null;
+      }
+      if (!targetKey) {
+        const list = await this.listSavedProjects();
+        targetKey = list[0]?.projectKey || null;
+      }
+      if (!targetKey) return false;
+
+      const saved = await idbGet(db, STORE_META, metaKeyForProject(targetKey));
       if (!saved || !saved.xmlText) return false;
 
-      const keys = new Set(await idbGetAllKeys(db, STORE_PHOTOS));
+      const keys = new Set(await idbGetPhotoKeysForProject(db, targetKey));
       this.revokeAllUrls();
-      this.projectName = saved.projectName || "lote_ipad";
+      this.projectKey = saved.projectKey || targetKey;
+      this.projectName = saved.projectName || targetKey;
       this.updatedAt = saved.updatedAt || null;
+      this.hasLocalEdits = Boolean(saved.hasLocalEdits);
+      this.needsZipExport = Boolean(saved.needsZipExport);
       this.doc = this.parseXml(saved.xmlText);
       this.xmlText = saved.xmlText;
       this.rebuildPhotoKeyMap(keys);
+
+      await this.setCurrentPointer(this.projectKey);
       return true;
     }
 
-    rebuildPhotoKeyMap(availableKeys) {
+    async setCurrentPointer(projectKey) {
+      const db = await this.ensureDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction([STORE_META], "readwrite");
+        tx.objectStore(STORE_META).put({
+          key: CURRENT_POINTER_KEY,
+          activeProjectKey: projectKey,
+        });
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    rebuildPhotoKeyMap(availableFullKeys) {
       this.photoKeys.clear();
       if (!this.doc) return;
       const imgs = directChildrenByTag(this.doc.documentElement, "image");
       imgs.forEach((imgEl, idx) => {
         const imgId = imgEl.getAttribute("id") || String(idx);
         const name = imgEl.getAttribute("name") || `image_${idx}`;
-        const key = this.resolvePhotoKeyForImage(name, availableKeys);
+        const key = this.resolvePhotoKeyForImage(name, availableFullKeys, this.projectKey);
         if (key) this.photoKeys.set(imgId, key);
       });
     }
 
-    async importFiles(fileList, onProgress = null) {
+    async importFiles(fileList, onProgress = null, onConflict = null) {
       const files = Array.from(fileList || []);
       if (files.length === 0) {
         throw new Error("No se seleccionó ningún archivo.");
@@ -408,15 +475,7 @@
         throw new Error("No se encontraron imágenes ni un annotations.xml válido.");
       }
 
-      // If only an XML was imported while images already exist in IndexedDB, keep existing photos!
       const db = await this.ensureDb();
-      let existingKeys = new Set();
-      if (collectedImages.size === 0) {
-        existingKeys = new Set(await idbGetAllKeys(db, STORE_PHOTOS));
-        if (existingKeys.size === 0) {
-          throw new Error("Has cargado un XML sin imágenes y no hay fotos guardadas en el iPad.");
-        }
-      }
 
       let doc;
       if (xmlCandidateText) {
@@ -438,50 +497,109 @@
         doc = buildDefaultXmlDoc(entries, inferredProjectName || "lote_ipad");
       }
 
-      // Persist photos + project atomically in IndexedDB
+      const taskName = doc.querySelector("meta > task > name")?.textContent?.trim() || "";
+      const targetProjectName = inferredProjectName || taskName || this.projectName || "lote_ipad";
+      const targetProjectKey = sanitizeBatchName(targetProjectName);
+
+      // Check if an edited copy of this exact batch already exists in IndexedDB
+      const existingRec = await idbGet(db, STORE_META, metaKeyForProject(targetProjectKey));
+      if (existingRec && existingRec.hasLocalEdits && typeof onConflict === "function") {
+        const keepLocal = await onConflict(existingRec);
+        if (keepLocal) {
+          await this.loadSavedProject(targetProjectKey);
+          return {
+            projectName: this.projectName,
+            projectKey: this.projectKey,
+            totalImages: this.listImages().length,
+            matchedPhotos: this.photoKeys.size,
+            resumedExisting: true,
+          };
+        }
+      }
+
+      // If only an XML was imported while this project's photos already exist in IndexedDB, keep them!
+      let existingPhotoKeysForTarget = [];
+      if (collectedImages.size === 0) {
+        existingPhotoKeysForTarget = await idbGetPhotoKeysForProject(db, targetProjectKey);
+        if (existingPhotoKeysForTarget.length === 0 && this.projectKey) {
+          // Allow applying an XML onto the currently active batch photos
+          const curKeys = await idbGetPhotoKeysForProject(db, this.projectKey);
+          if (curKeys.length > 0) {
+            existingPhotoKeysForTarget = curKeys;
+          }
+        }
+        if (existingPhotoKeysForTarget.length === 0) {
+          throw new Error("Has cargado un XML sin imágenes y este lote no tiene fotos guardadas en el iPad.");
+        }
+      }
+
+      let storedFullKeys = [];
       if (collectedImages.size > 0) {
+        report(`Guardando ${collectedImages.size} fotos en almacenamiento del iPad...`);
+        const oldKeys = await idbGetPhotoKeysForProject(db, targetProjectKey);
         await new Promise((resolve, reject) => {
           const tx = db.transaction([STORE_PHOTOS], "readwrite");
           const store = tx.objectStore(STORE_PHOTOS);
-          store.clear();
-          for (const [key, item] of collectedImages.entries()) {
+          for (const k of oldKeys) {
+            store.delete(k);
+          }
+          for (const [relPath, item] of collectedImages.entries()) {
+            const fullKey = photoKeyFor(targetProjectKey, relPath);
+            storedFullKeys.push(fullKey);
             store.put({
-              key,
+              key: fullKey,
+              projectKey: targetProjectKey,
+              relPath,
               blob: item.blob,
-              mimeType: item.blob.type || mimeForName(key),
+              mimeType: item.blob.type || mimeForName(relPath),
             });
           }
           tx.oncomplete = resolve;
           tx.onerror = () => reject(tx.error);
         });
+      } else {
+        storedFullKeys = existingPhotoKeysForTarget;
       }
 
       this.revokeAllUrls();
+      this.projectKey = targetProjectKey;
+      this.projectName = targetProjectName;
       this.doc = doc;
-      this.projectName = inferredProjectName || this.getTaskName() || "lote_ipad";
       this.xmlText = serializeXmlDoc(doc);
       this.updatedAt = new Date().toISOString();
+      this.hasLocalEdits = false;
+      this.needsZipExport = false;
 
-      const photoKeysSet = collectedImages.size > 0 ? new Set(collectedImages.keys()) : existingKeys;
-      this.rebuildPhotoKeyMap(photoKeysSet);
-
+      this.rebuildPhotoKeyMap(new Set(storedFullKeys));
       await this.persistProjectMeta();
+      await this.setCurrentPointer(this.projectKey);
+
       return {
         projectName: this.projectName,
+        projectKey: this.projectKey,
         totalImages: this.listImages().length,
         matchedPhotos: this.photoKeys.size,
+        resumedExisting: false,
       };
     }
 
     async persistProjectMeta() {
+      if (!this.projectKey) return;
       const db = await this.ensureDb();
+      const imgs = this.listImages();
+      const annotatedCount = imgs.filter((i) => i.num_masks > 0).length;
       await new Promise((resolve, reject) => {
         const tx = db.transaction([STORE_META], "readwrite");
         tx.objectStore(STORE_META).put({
-          key: ACTIVE_KEY,
+          key: metaKeyForProject(this.projectKey),
+          projectKey: this.projectKey,
           projectName: this.projectName,
           xmlText: this.xmlText,
           updatedAt: this.updatedAt,
+          hasLocalEdits: this.hasLocalEdits,
+          needsZipExport: this.needsZipExport,
+          totalImages: imgs.length,
+          annotatedCount,
         });
         tx.oncomplete = resolve;
         tx.onerror = () => reject(tx.error);
@@ -702,6 +820,8 @@
 
       this.xmlText = serializeXmlDoc(this.doc);
       this.updatedAt = new Date().toISOString();
+      this.hasLocalEdits = true;
+      this.needsZipExport = true;
       await this.persistProjectMeta();
 
       return {
@@ -719,9 +839,12 @@
       return {
         ok: true,
         mode: "offline",
+        project_key: this.projectKey,
         project_name: this.projectName,
         xml_name: "annotations.xml",
         cvat_zip_name: `anotacion_${this.projectName}.zip`,
+        has_local_edits: this.hasLocalEdits,
+        needs_zip_export: this.needsZipExport,
         total_images: imgs.length,
         labels: this.getLabels(),
         sam: {
@@ -747,18 +870,52 @@
         compression: "DEFLATE",
         compressionOptions: { level: 6 },
       });
+      this.needsZipExport = false;
+      await this.persistProjectMeta();
       return {
         blob,
         filename: `anotacion_${this.projectName}.zip`,
       };
     }
 
+    async deleteProject(projectKey) {
+      const db = await this.ensureDb();
+      const targetKey = projectKey || this.projectKey;
+      if (!targetKey) return;
+      const photoKeys = await idbGetPhotoKeysForProject(db, targetKey);
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction([STORE_META, STORE_PHOTOS], "readwrite");
+        tx.objectStore(STORE_META).delete(metaKeyForProject(targetKey));
+        const pStore = tx.objectStore(STORE_PHOTOS);
+        for (const k of photoKeys) pStore.delete(k);
+        if (targetKey === this.projectKey) {
+          tx.objectStore(STORE_META).delete(CURRENT_POINTER_KEY);
+        }
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+      if (targetKey === this.projectKey) {
+        this.revokeAllUrls();
+        this.projectKey = "";
+        this.projectName = "lote_ipad";
+        this.doc = null;
+        this.xmlText = "";
+        this.photoKeys.clear();
+        this.hasLocalEdits = false;
+        this.needsZipExport = false;
+      }
+    }
+
     async clearProject() {
       const db = await this.ensureDb();
       this.revokeAllUrls();
+      this.projectKey = "";
+      this.projectName = "lote_ipad";
       this.doc = null;
       this.xmlText = "";
       this.photoKeys.clear();
+      this.hasLocalEdits = false;
+      this.needsZipExport = false;
       await new Promise((resolve, reject) => {
         const tx = db.transaction([STORE_META, STORE_PHOTOS], "readwrite");
         tx.objectStore(STORE_META).clear();

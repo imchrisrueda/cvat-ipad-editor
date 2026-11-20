@@ -14,26 +14,25 @@
 </head>
 <body>
   <div id="app" class="app-shell">
-    <!-- Top bar -->
+    <!-- Top bar: status on left, navigation + save + actions aligned right -->
     <header class="topbar">
       <div class="topbar-left">
-        <button id="btn-prev-img" class="btn btn-icon" title="Imagen anterior">◀</button>
-        <select id="select-image" class="image-select" aria-label="Seleccionar imagen"></select>
-        <button id="btn-next-img" class="btn btn-icon" title="Imagen siguiente">▶</button>
-        <span id="image-dims-badge" class="badge">0×0</span>
-      </div>
-
-      <div class="topbar-center">
         <span id="active-tool-pill" class="tool-pill tool-brush">✏️ Lápiz · 12px</span>
         <span id="active-object-pill" class="layer-pill">Sin objeto</span>
+        <span id="image-dims-badge" class="badge">0×0</span>
         <span id="save-status" class="save-status saved">Sin cambios</span>
       </div>
 
       <div class="topbar-right">
-        <button id="btn-local-batch" class="btn" title="Cargar o exportar lote local (En mi iPad)">📂 Lote iPad</button>
+        <div class="nav-save-group">
+          <button id="btn-prev-img" class="btn btn-icon" title="Imagen anterior">◀</button>
+          <select id="select-image" class="image-select" aria-label="Seleccionar imagen"></select>
+          <button id="btn-next-img" class="btn btn-icon" title="Imagen siguiente">▶</button>
+          <button id="btn-save" class="btn btn-primary" title="Guardar cambios">💾 Guardar</button>
+        </div>
+        <button id="btn-local-batch" class="btn" title="Cargar, cambiar o exportar lote en iPad / Drive">📂 Lote iPad</button>
         <button id="btn-fit" class="btn" title="Ajustar al lienzo">⌖ Ajustar</button>
-        <button id="btn-fullscreen" class="btn" title="Pantalla completa (F)">⛶ Pantalla completa</button>
-        <button id="btn-save" class="btn btn-primary" title="Guardar cambios">💾 Guardar</button>
+        <button id="btn-fullscreen" class="btn" title="Pantalla completa (F)">⛶</button>
         <button id="btn-toggle-panel" class="btn" title="Mostrar/ocultar panel derecho">☰ Objetos</button>
       </div>
     </header>
@@ -282,8 +281,14 @@
           <span id="local-current-meta" class="muted-note"></span>
           <div class="modal-row">
             <button id="btn-local-continue" class="btn btn-primary btn-sm">▶ Seguir editando lote actual</button>
-            <button id="btn-local-export-zip" class="btn btn-accent btn-sm">📦 Guardar ZIP en Drive / iPad</button>
+            <button id="btn-local-export-zip" class="btn btn-accent btn-sm">📦 Exportar ZIP a Drive / iPad</button>
           </div>
+        </div>
+
+        <div id="local-saved-section" class="local-status-box hidden">
+          <strong>Lotes guardados en memoria del iPad</strong>
+          <span class="muted-note">Tus cambios se conservan por lote aunque cambies a otro. Usa «Exportar ZIP» para llevarlos de vuelta a Google Drive.</span>
+          <div id="local-saved-list" class="local-saved-list"></div>
         </div>
 
         <label class="file-drop-btn" for="local-files-input">
