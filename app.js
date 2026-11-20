@@ -2490,7 +2490,9 @@
       elLocalImportStatus.textContent = "Cargando archivos en el iPad (IndexedDB)...";
       try {
         const store = window.CvatOfflineStore;
-        const res = await store.importFiles(files);
+        const res = await store.importFiles(files, (msg) => {
+          elLocalImportStatus.textContent = msg;
+        });
         state.offlineMode = true;
         await applyWorkspaceStatus(store.getStatus());
         updateLocalModalUi();

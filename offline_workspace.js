@@ -70,6 +70,14 @@
     return idx >= 0 ? clean.slice(idx + 1) : clean;
   }
 
+  function directChildrenByTag(parent, tagName) {
+    if (!parent) return [];
+    const target = String(tagName || "").toLowerCase();
+    return Array.from(parent.children || []).filter(
+      (child) => (child.tagName || "").toLowerCase() === target
+    );
+  }
+
   function isIgnoredArchivePath(relPath) {
     const clean = normalizeRelPath(relPath);
     if (!clean || clean.endsWith("/")) return true;
@@ -317,7 +325,7 @@
     rebuildPhotoKeyMap(availableKeys) {
       this.photoKeys.clear();
       if (!this.doc) return;
-      const imgs = Array.from(this.doc.documentElement.querySelectorAll(":scope > image"));
+      const imgs = directChildrenByTag(this.doc.documentElement, "image");
       imgs.forEach((imgEl, idx) => {
         const imgId = imgEl.getAttribute("id") || String(idx);
         const name = imgEl.getAttribute("name") || `image_${idx}`;
@@ -326,7 +334,7 @@
       });
     }
 
-    async importFiles(fileList) {
+    async importFiles(fileList, onProgress = null) {
       const files = Array.from(fileList || []);
       if (files.length === 0) {
         throw new Error("No se seleccionó ningún archivo.");
@@ -335,39 +343,61 @@
       const JSZipLib = window.JSZip;
       const collectedImages = new Map(); // normalized path -> { blob, name }
       let xmlCandidateText = null;
+      let xmlIsExplicitAnnotations = false;
       let inferredProjectName = null;
+
+      const report = (msg) => {
+        if (typeof onProgress === "function") onProgress(msg);
+      };
+
+      const acceptXmlText = (text, entryName) => {
+        if (!text || !text.includes("<annotations")) return;
+        const isExact = baseName(entryName).toLowerCase() === "annotations.xml";
+        if (!xmlCandidateText || (isExact && !xmlIsExplicitAnnotations)) {
+          xmlCandidateText = text;
+          xmlIsExplicitAnnotations = isExact;
+        }
+      };
+
+      const unpackZipArchive = async (zipSource, archiveName, depth = 0) => {
+        if (!JSZipLib) {
+          throw new Error("No se encontró JSZip en local para descomprimir ZIPs.");
+        }
+        if (depth > 3) return;
+        report(`Abriendo ZIP: ${baseName(archiveName)}...`);
+        const zip = await JSZipLib.loadAsync(zipSource);
+        const entries = Object.values(zip.files);
+        for (const entry of entries) {
+          if (entry.dir || isIgnoredArchivePath(entry.name)) continue;
+          const entryClean = normalizeRelPath(entry.name);
+          const entryBase = baseName(entryClean).toLowerCase();
+          if (entryBase.endsWith(".zip") && depth < 3) {
+            const innerBytes = await entry.async("uint8array");
+            await unpackZipArchive(innerBytes, entryClean, depth + 1);
+          } else if (entryBase.endsWith(".xml")) {
+            const text = await entry.async("string");
+            acceptXmlText(text, entryClean);
+          } else if (IMAGE_EXTS.has(extOf(entryBase))) {
+            const rawBlob = await entry.async("blob");
+            const typedBlob = rawBlob.type ? rawBlob : new Blob([rawBlob], { type: mimeForName(entryClean) });
+            collectedImages.set(entryClean, { blob: typedBlob, name: entryClean });
+            if (collectedImages.size % 10 === 0) {
+              report(`Extrayendo imágenes (${collectedImages.size})...`);
+            }
+          }
+        }
+      };
 
       for (const file of files) {
         const lower = file.name.toLowerCase();
         if (lower.endsWith(".zip")) {
-          if (!JSZipLib) {
-            throw new Error("No se encontró JSZip en local para descomprimir ZIPs.");
-          }
           if (!inferredProjectName) {
             inferredProjectName = sanitizeBatchName(file.name);
           }
-          const zip = await JSZipLib.loadAsync(file);
-          const entries = Object.values(zip.files);
-          for (const entry of entries) {
-            if (entry.dir || isIgnoredArchivePath(entry.name)) continue;
-            const entryClean = normalizeRelPath(entry.name);
-            const entryBase = baseName(entryClean).toLowerCase();
-            if (entryBase === "annotations.xml" || (entryBase.endsWith(".xml") && !xmlCandidateText)) {
-              const text = await entry.async("string");
-              if (text.includes("<annotations")) {
-                xmlCandidateText = text;
-              }
-            } else if (IMAGE_EXTS.has(extOf(entryBase))) {
-              const rawBlob = await entry.async("blob");
-              const typedBlob = rawBlob.type ? rawBlob : new Blob([rawBlob], { type: mimeForName(entryClean) });
-              collectedImages.set(entryClean, { blob: typedBlob, name: entryClean });
-            }
-          }
+          await unpackZipArchive(file, file.name, 0);
         } else if (lower.endsWith(".xml")) {
           const text = await file.text();
-          if (text.includes("<annotations")) {
-            xmlCandidateText = text;
-          }
+          acceptXmlText(text, file.name);
         } else if (IMAGE_EXTS.has(extOf(lower))) {
           const clean = normalizeRelPath(file.webkitRelativePath || file.name);
           collectedImages.set(clean, { blob: file, name: clean });
@@ -507,9 +537,10 @@
         labelsEl = this.doc.createElement("labels");
         task.appendChild(labelsEl);
       }
-      const exists = Array.from(labelsEl.querySelectorAll(":scope > label > name")).some(
-        (n) => n.textContent.trim() === labelName
-      );
+      const exists = directChildrenByTag(labelsEl, "label").some((lblNode) => {
+        const nameNode = directChildrenByTag(lblNode, "name")[0];
+        return nameNode && nameNode.textContent.trim() === labelName;
+      });
       if (exists) return;
 
       const lblEl = this.doc.createElement("label");
@@ -526,12 +557,12 @@
 
     listImages() {
       if (!this.doc) return [];
-      const imgs = Array.from(this.doc.documentElement.querySelectorAll(":scope > image"));
+      const imgs = directChildrenByTag(this.doc.documentElement, "image");
       return imgs.map((el, idx) => {
         const id = el.getAttribute("id") || String(idx);
-        const numMasks = el.querySelectorAll(":scope > mask").length;
-        const numPolygons = el.querySelectorAll(":scope > polygon").length;
-        const numPoints = el.querySelectorAll(":scope > points").length;
+        const numMasks = directChildrenByTag(el, "mask").length;
+        const numPolygons = directChildrenByTag(el, "polygon").length;
+        const numPoints = directChildrenByTag(el, "points").length;
         return {
           id,
           name: el.getAttribute("name") || `image_${idx}`,
@@ -549,7 +580,7 @@
     findImageElement(imageId) {
       if (!this.doc) throw new Error("No hay ningún lote cargado.");
       const target = String(imageId);
-      const imgs = Array.from(this.doc.documentElement.querySelectorAll(":scope > image"));
+      const imgs = directChildrenByTag(this.doc.documentElement, "image");
       for (let idx = 0; idx < imgs.length; idx++) {
         const el = imgs[idx];
         if (
@@ -588,7 +619,7 @@
       const labelColors = new Map(this.getLabels().map((l) => [l.name, l.color]));
 
       const objects = [];
-      const maskEls = Array.from(el.querySelectorAll(":scope > mask"));
+      const maskEls = directChildrenByTag(el, "mask");
       maskEls.forEach((mEl, idx) => {
         const lbl = (mEl.getAttribute("label") || "").trim();
         if (!lbl) return;
@@ -615,7 +646,7 @@
       });
 
       const points = [];
-      el.querySelectorAll(":scope > points").forEach((pEl) => {
+      directChildrenByTag(el, "points").forEach((pEl) => {
         const lbl = (pEl.getAttribute("label") || "").trim();
         for (const pt of parsePointsAttr(pEl.getAttribute("points"))) {
           points.push({ label: lbl, x: pt.x, y: pt.y });
@@ -637,7 +668,7 @@
       const w = Number(el.getAttribute("width") || 0);
       const h = Number(el.getAttribute("height") || 0);
 
-      Array.from(el.querySelectorAll(":scope > mask")).forEach((node) => el.removeChild(node));
+      directChildrenByTag(el, "mask").forEach((node) => el.removeChild(node));
 
       let count = 0;
       objects.forEach((obj, idx) => {

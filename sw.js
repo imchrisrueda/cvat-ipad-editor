@@ -1,4 +1,4 @@
-const CACHE_NAME = "cvat-ipad-editor-v1";
+const CACHE_NAME = "cvat-ipad-editor-v2";
 const PRECACHE_ASSETS = [
   "./",
   "./index.html",
@@ -33,25 +33,17 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.includes("/api/")) return;
 
+  // Network-first for HTML/JS/CSS/manifest so online updates reach the iPad immediately,
+  // with instant fallback to cache when working offline.
   event.respondWith(
-    caches.match(req, { ignoreSearch: true }).then((cached) => {
-      if (cached) {
-        fetch(req)
-          .then((fresh) => {
-            if (fresh && fresh.ok && fresh.type === "basic") {
-              caches.open(CACHE_NAME).then((cache) => cache.put(req, fresh.clone()));
-            }
-          })
-          .catch(() => {});
-        return cached;
-      }
-      return fetch(req).then((resp) => {
+    fetch(req)
+      .then((resp) => {
         if (resp && resp.ok && resp.type === "basic") {
           const clone = resp.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
         }
         return resp;
-      });
-    })
+      })
+      .catch(() => caches.match(req, { ignoreSearch: true }))
   );
 });
