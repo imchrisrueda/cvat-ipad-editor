@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="CVAT Editor" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>CVAT Mask Editor · iPad Apple Pencil</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./icons/icon-180.png" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <!-- Top bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <button id="btn-prev-img" class="btn btn-icon" title="Imagen anterior">◀</button>
+        <select id="select-image" class="image-select" aria-label="Seleccionar imagen"></select>
+        <button id="btn-next-img" class="btn btn-icon" title="Imagen siguiente">▶</button>
+        <span id="image-dims-badge" class="badge">0×0</span>
+      </div>
+
+      <div class="topbar-center">
+        <span id="active-tool-pill" class="tool-pill tool-brush">✏️ Lápiz · 12px</span>
+        <span id="active-object-pill" class="layer-pill">Sin objeto</span>
+        <span id="save-status" class="save-status saved">Sin cambios</span>
+      </div>
+
+      <div class="topbar-right">
+        <button id="btn-local-batch" class="btn" title="Cargar o exportar lote local (En mi iPad)">📂 Lote iPad</button>
+        <button id="btn-fit" class="btn" title="Ajustar al lienzo">⌖ Ajustar</button>
+        <button id="btn-fullscreen" class="btn" title="Pantalla completa (F)">⛶ Pantalla completa</button>
+        <button id="btn-save" class="btn btn-primary" title="Guardar cambios">💾 Guardar</button>
+        <button id="btn-toggle-panel" class="btn" title="Mostrar/ocultar panel derecho">☰ Objetos</button>
+      </div>
+    </header>
+
+    <!-- Main workspace: left edge kept completely clear for left-hand Apple Pencil -->
+    <main class="workspace">
+      <!-- Canvas Viewport -->
+      <section id="viewport" class="viewport">
+        <div id="canvas-stage" class="canvas-stage">
+          <canvas id="photo-canvas"></canvas>
+          <canvas id="mask-canvas"></canvas>
+          <canvas id="sam-canvas"></canvas>
+          <canvas id="ui-canvas"></canvas>
+        </div>
+
+        <div id="pencil-toast" class="pencil-toast hidden"></div>
+        <div id="zoom-hud" class="zoom-hud">100%</div>
+
+        <!-- Fullscreen quick exit & save bar -->
+        <div id="fullscreen-hud" class="fullscreen-hud" aria-label="Controles en pantalla completa">
+          <button id="fs-btn-prev" class="btn btn-xs" title="Imagen anterior">◀</button>
+          <button id="fs-btn-next" class="btn btn-xs" title="Imagen siguiente">▶</button>
+          <button id="fs-btn-fit" class="btn btn-xs" title="Ajustar al lienzo">⌖</button>
+          <button id="fs-btn-save" class="btn btn-xs btn-primary" title="Guardar">💾 Guardar</button>
+          <button id="fs-btn-exit" class="btn btn-xs" title="Salir de pantalla completa">✕ Salir</button>
+        </div>
+
+        <!-- Movable Apple-Notes-style floating toolbar (right side by default for right hand) -->
+        <aside id="notes-dock" class="notes-dock" aria-label="Barra flotante de herramientas">
+          <div class="notes-dock-header">
+            <button id="notes-drag-handle" class="dock-handle" title="Arrastrar barra de herramientas">⠿</button>
+            <button id="btn-dock-orient" class="dock-mini-btn" title="Cambiar vertical / horizontal">⤢</button>
+          </div>
+
+          <div class="notes-dock-items">
+            <button id="btn-tool-brush" class="tool-btn active" data-tool="brush" title="Lápiz (toca de nuevo para cambiar tamaño)">
+              <span class="ico">✏️</span>
+              <span id="lbl-brush-size" class="lbl">12px</span>
+            </button>
+            <button id="btn-tool-eraser" class="tool-btn" data-tool="eraser" title="Borrador (toca de nuevo para cambiar tamaño)">
+              <span class="ico" aria-hidden="true">
+                <svg class="eraser-svg" viewBox="0 0 24 24" width="20" height="20" fill="none">
+                  <path d="M15.6 3.8a2.2 2.2 0 0 1 3.1 0l2.5 2.5a2.2 2.2 0 0 1 0 3.1L11.1 19.5a2.2 2.2 0 0 1-1.55.65H5.2a2.2 2.2 0 0 1-1.56-.65l-1.8-1.8a2.2 2.2 0 0 1 0-3.1L15.6 3.8Z" fill="#f472b6" stroke="#fbcfe8" stroke-width="1.5"/>
+                  <path d="M9.6 9.8l5.6 5.6-4.1 4.1a2.2 2.2 0 0 1-1.55.65H5.2a2.2 2.2 0 0 1-1.56-.65l-1.8-1.8a2.2 2.2 0 0 1 0-3.1L9.6 9.8Z" fill="#f8fafc"/>
+                  <path d="M9 20.15h11" stroke="#cbd5e1" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+              </span>
+              <span id="lbl-eraser-size" class="lbl">16px</span>
+            </button>
+            <button class="tool-btn" data-tool="lasso_fill" title="Lazo relleno">
+              <span class="ico">〰️</span>
+              <span class="lbl">Lazo +</span>
+            </button>
+            <button class="tool-btn" data-tool="lasso_erase" title="Lazo borrador">
+              <span class="ico">✂️</span>
+              <span class="lbl">Lazo -</span>
+            </button>
+            <button class="tool-btn tool-ai" data-tool="sam_ai" title="Herramienta IA SAM2 / SAM1">
+              <span class="ico">✨</span>
+              <span class="lbl">IA SAM</span>
+            </button>
+
+            <div class="dock-sep"></div>
+
+            <button id="btn-join-masks" class="tool-btn" title="Join Masks: unir máscaras seleccionadas">
+              <span class="ico">🔗</span>
+              <span id="lbl-join-btn" class="lbl">Join</span>
+            </button>
+            <button id="btn-opacity-popover" class="tool-btn" title="Opacidad de la máscara y opciones">
+              <span class="ico">🌗</span>
+              <span id="lbl-opacity-btn" class="lbl">55%</span>
+            </button>
+
+            <div class="dock-sep"></div>
+
+            <button id="btn-undo" class="tool-btn" title="Deshacer">
+              <span class="ico">↩️</span>
+              <span class="lbl">Desh.</span>
+            </button>
+            <button id="btn-redo" class="tool-btn" title="Rehacer">
+              <span class="ico">↪️</span>
+              <span class="lbl">Reh.</span>
+            </button>
+            <button id="btn-peek" class="tool-btn" title="Mantener pulsado para ver original (Espacio)">
+              <span class="ico">👁️</span>
+              <span class="lbl">Original</span>
+            </button>
+            <button id="btn-gray-bg" class="tool-btn" title="Vista previa fondo gris">
+              <span class="ico">🌫️</span>
+              <span class="lbl">Fondo</span>
+            </button>
+            <button id="btn-dock-save" class="tool-btn" title="Guardar">
+              <span class="ico">💾</span>
+              <span class="lbl">Guardar</span>
+            </button>
+          </div>
+        </aside>
+
+        <!-- Tool Size Slider Popover (anchored directly to Lápiz or Borrador) -->
+        <section id="tool-size-popover" class="floating-popover size-popover hidden" aria-label="Tamaño de herramienta">
+          <div class="popover-head">
+            <span id="tool-size-title" class="popover-title">12 px</span>
+            <button id="btn-size-close" class="btn btn-xs">✕</button>
+          </div>
+          <div id="tool-size-track" class="size-track" role="slider" aria-valuemin="1" aria-valuemax="200" aria-valuenow="12" tabindex="0">
+            <div id="tool-size-fill" class="size-track-fill"></div>
+            <div id="tool-size-thumb" class="size-track-thumb"></div>
+          </div>
+          <input id="tool-size-slider" class="sr-only" type="range" min="1" max="200" value="12" />
+          <div class="preset-row size-presets-wrap">
+            <button class="chip size-preset" data-size="1">1</button>
+            <button class="chip size-preset" data-size="3">3</button>
+            <button class="chip size-preset" data-size="8">8</button>
+            <button class="chip size-preset" data-size="24">24</button>
+            <button class="chip size-preset" data-size="64">64</button>
+          </div>
+        </section>
+
+        <!-- Mask Opacity Popover (opened from movable toolbar) -->
+        <section id="opacity-popover" class="floating-popover compact-popover hidden" aria-label="Opacidad de máscara">
+          <div class="popover-head">
+            <span class="popover-title">Opacidad: <strong id="mask-opacity-val">55%</strong></span>
+            <button id="btn-opacity-close" class="btn btn-xs">✕</button>
+          </div>
+          <div class="control-row">
+            <input id="mask-opacity" type="range" min="10" max="95" value="55" />
+          </div>
+          <label class="toggle-row">
+            <input id="chk-palm-rejection" type="checkbox" checked />
+            <span>Solo Apple Pencil dibuja</span>
+          </label>
+          <label class="toggle-row">
+            <input id="chk-pressure" type="checkbox" />
+            <span>Presión del Pencil</span>
+          </label>
+          <label class="toggle-row">
+            <input id="chk-disjoint" type="checkbox" checked />
+            <span>Objetos disjuntos al pintar</span>
+          </label>
+        </section>
+
+        <!-- Contextual AI (SAM2 / SAM1) panel -->
+        <section id="sam-popover" class="floating-popover hidden" aria-label="Controles IA SAM / SAM2">
+          <div class="popover-head">
+            <span class="popover-title">✨ IA SAM Interactivo</span>
+            <span id="sam-status-badge" class="sam-badge">Comprobando...</span>
+          </div>
+
+          <div class="segmented-row">
+            <button id="btn-sam-model-sam2" class="seg-btn active" data-sam-model="sam2">SAM2</button>
+            <button id="btn-sam-model-sam1" class="seg-btn" data-sam-model="sam1">SAM1</button>
+          </div>
+
+          <div class="segmented-row">
+            <button id="btn-sam-mode-pos" class="seg-btn active" data-sam-mode="pos">+ Punto</button>
+            <button id="btn-sam-mode-neg" class="seg-btn" data-sam-mode="neg">− Punto</button>
+            <button id="btn-sam-mode-box" class="seg-btn" data-sam-mode="box">▢ Caja</button>
+          </div>
+
+          <p id="sam-info-line" class="muted-note">Toca con el Pencil para segmentar con SAM2.</p>
+
+          <div class="popover-actions">
+            <button id="btn-sam-add" class="btn btn-primary btn-xs" disabled>➕ Sumar al objeto</button>
+            <button id="btn-sam-new" class="btn btn-accent btn-xs" disabled>✨ Nuevo objeto</button>
+          </div>
+          <div class="popover-actions">
+            <button id="btn-sam-replace" class="btn btn-xs" disabled>✓ Reemplazar</button>
+            <button id="btn-sam-undo-pt" class="btn btn-xs" disabled>↩️ Quitar punto</button>
+          </div>
+          <button id="btn-sam-clear" class="btn btn-danger-outline btn-xs" style="width:100%;" disabled>✕ Limpiar puntos IA</button>
+        </section>
+
+        <!-- Contextual Join Masks panel -->
+        <section id="join-popover" class="floating-popover hidden" aria-label="Join Masks">
+          <div class="popover-head">
+            <span class="popover-title">🔗 Join Masks</span>
+            <button id="btn-join-close" class="btn btn-xs">✕</button>
+          </div>
+
+          <p id="join-summary-text" class="muted-note">Marca 2 o más objetos en el panel derecho para unirlos en una sola máscara.</p>
+
+          <div class="control-row">
+            <label for="join-target-label">Etiqueta resultante:</label>
+            <select id="join-target-label" class="image-select" style="max-width: 100%;"></select>
+          </div>
+
+          <button id="btn-join-selected" class="btn btn-primary btn-sm" disabled>🔗 Unir seleccionados (0)</button>
+          <button id="btn-join-sam" class="btn btn-accent btn-sm hidden">✨ Unir propuesta SAM al activo</button>
+          <button id="btn-join-fragments" class="btn btn-sm">🩹 Unir fragmentos cercanos (2 px)</button>
+        </section>
+      </section>
+
+      <!-- Right Inspector Panel: Objects list + Join + Export -->
+      <aside id="inspector" class="inspector">
+        <section class="panel-card">
+          <div class="card-header-row">
+            <h3>Objetos (<span id="objects-count">0</span>)</h3>
+            <div class="mini-btn-group">
+              <button id="btn-show-all-objs" class="btn btn-xs" title="Mostrar todos">👁️ Todos</button>
+              <button id="btn-isolate-obj" class="btn btn-xs" title="Ver solo el objeto activo">Solo 1</button>
+            </div>
+          </div>
+
+          <div class="new-object-row">
+            <select id="new-object-label" class="image-select" aria-label="Etiqueta para nuevo objeto"></select>
+            <button id="btn-new-object" class="btn btn-accent btn-xs">+ Nuevo</button>
+          </div>
+
+          <div id="objects-list" class="layers-list"></div>
+
+          <div class="object-footer-actions">
+            <button id="btn-join-selected-panel" class="btn btn-primary btn-sm" disabled>🔗 Unir marcados (0)</button>
+            <button id="btn-clear-object" class="btn btn-danger-outline btn-sm">🗑️ Vaciar máscara activa</button>
+          </div>
+        </section>
+
+        <section class="panel-card">
+          <h3>Exportación y Sincronización</h3>
+          <div class="export-stack">
+            <button id="btn-download-cvat-zip" class="btn btn-primary btn-sm">⬇ Descargar ZIP CVAT 1.1</button>
+            <button id="btn-download-xml" class="btn btn-sm">⬇ Descargar annotations.xml</button>
+            <button id="btn-download-ipad-bundle" class="btn btn-sm hidden" title="Descarga fotos + annotations.xml en un ZIP para trabajar sin conexión en el iPad">📦 Bajar lote completo al iPad</button>
+            <button id="btn-upload-sync-zip" class="btn btn-accent btn-sm hidden" title="Sube un anotacion_*.zip editado en el iPad para sincronizarlo con el ordenador">⬆ Subir ZIP editado del iPad al PC</button>
+            <input id="pc-sync-upload-input" type="file" accept=".zip,.xml" class="sr-only" />
+            <button id="btn-export-benchmark" class="btn btn-sm">🧪 Exportar 7 capas PNG benchmark</button>
+          </div>
+          <p id="server-info" class="muted-note"></p>
+        </section>
+      </aside>
+    </main>
+
+    <!-- Local / Offline Batch Modal for iPad standalone mode -->
+    <div id="local-batch-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="local-batch-title">
+      <section class="modal-card">
+        <div class="modal-head">
+          <h2 id="local-batch-title">📂 Modo Local en iPad (sin PC)</h2>
+          <button id="btn-local-modal-close" class="btn btn-xs">✕</button>
+        </div>
+        <p class="muted-note">
+          Selecciona desde <strong>En mi iPad → CVAT_iPad_Sync</strong> tu archivo de lote
+          (un ZIP combinado con fotos + XML, o bien <code>imagenes.zip</code> + <code>anotaciones_CVAT.zip</code> / <code>annotations.xml</code>, o fotos sueltas).
+        </p>
+
+        <div id="local-current-box" class="local-status-box hidden">
+          <strong id="local-current-name">Lote cargado</strong>
+          <span id="local-current-meta" class="muted-note"></span>
+          <div class="modal-row">
+            <button id="btn-local-continue" class="btn btn-primary btn-sm">▶ Seguir editando lote actual</button>
+            <button id="btn-local-export-zip" class="btn btn-accent btn-sm">📦 Guardar ZIP en En mi iPad</button>
+          </div>
+        </div>
+
+        <label class="file-drop-btn" for="local-files-input">
+          <input id="local-files-input" type="file" multiple accept=".zip,.xml,image/*" class="sr-only" />
+          <span>📁 Elegir ZIP / XML / Imágenes de «En mi iPad»</span>
+        </label>
+
+        <p id="local-import-status" class="muted-note">Todo lo que edites se guarda automáticamente en el almacenamiento interno del iPad (IndexedDB).</p>
+
+        <div class="modal-foot">
+          <button id="btn-local-clear" class="btn btn-danger-outline btn-xs">🗑️ Borrar caché local</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="./vendor/jszip.min.js"></script>
+  <script src="./offline_workspace.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
