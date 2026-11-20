@@ -2442,7 +2442,7 @@
       const match = disp.match(/filename="([^"]+)"/i);
       const fname = match ? match[1] : "lote_para_ipad.zip";
       triggerBlobDownload(await resp.blob(), fname);
-      showToast(`📦 Guarda ${fname} en En mi iPad → CVAT_iPad_Sync`);
+      showToast(`📦 Guarda ${fname} en Google Drive o En mi iPad`);
     };
   }
 

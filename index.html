@@ -273,7 +273,7 @@
           <button id="btn-local-modal-close" class="btn btn-xs">✕</button>
         </div>
         <p class="muted-note">
-          Selecciona desde <strong>En mi iPad → CVAT_iPad_Sync</strong> tu archivo de lote
+          Selecciona desde <strong>Google Drive</strong> o <strong>En mi iPad</strong> tu archivo de lote
           (un ZIP combinado con fotos + XML, o bien <code>imagenes.zip</code> + <code>anotaciones_CVAT.zip</code> / <code>annotations.xml</code>, o fotos sueltas).
         </p>
 
@@ -282,13 +282,13 @@
           <span id="local-current-meta" class="muted-note"></span>
           <div class="modal-row">
             <button id="btn-local-continue" class="btn btn-primary btn-sm">▶ Seguir editando lote actual</button>
-            <button id="btn-local-export-zip" class="btn btn-accent btn-sm">📦 Guardar ZIP en En mi iPad</button>
+            <button id="btn-local-export-zip" class="btn btn-accent btn-sm">📦 Guardar ZIP en Drive / iPad</button>
           </div>
         </div>
 
         <label class="file-drop-btn" for="local-files-input">
           <input id="local-files-input" type="file" multiple accept=".zip,.xml,image/*" class="sr-only" />
-          <span>📁 Elegir ZIP / XML / Imágenes de «En mi iPad»</span>
+          <span>📁 Elegir ZIP / XML / Imágenes (Drive o En mi iPad)</span>
         </label>
 
         <p id="local-import-status" class="muted-note">Todo lo que edites se guarda automáticamente en el almacenamiento interno del iPad (IndexedDB).</p>
